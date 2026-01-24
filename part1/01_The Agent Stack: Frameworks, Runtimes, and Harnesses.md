@@ -2,7 +2,15 @@
 
 > Understand the differences between LangChain, LangGraph, and DeepAgents and when to use each one
 
+
 LangChain maintains several open source packages to help you build agents. Each serves a different purpose in the agent development stack. Understanding the distinctions between [agent frameworks](#agent-frameworks-like-langchain),[agent runtimes](#agent-runtimes-like-langgraph), and [agent harnesses](#agent-harnesses-like-the-deep-agents-sdk) helps you choose the right tool for your needs.
+
+Developing LLM-powered applications involves significant complexity beyond simple prompt-and-response cycles. LangChain and LangGraph address these specific challenges:
+
+* Orchestration: Managing complex sequences where the output of one LLM call serves as the input for the next (Chains).
+* State & Memory: Implementing persistence so that applications can remember past interactions across different sessions.
+* Tool Integration: Providing a standard way to connect LLMs to external APIs, databases, and local functions.
+* Control Flow: Using LangGraph to create cyclic graphs for agents that need to reason, act, and observe in loops.
 
 ## Agent frameworks (like LangChain)
 
