@@ -5,13 +5,6 @@
 
 LangChain maintains several open source packages to help you build agents. Each serves a different purpose in the agent development stack. Understanding the distinctions between [agent frameworks](#agent-frameworks-like-langchain),[agent runtimes](#agent-runtimes-like-langgraph), and [agent harnesses](#agent-harnesses-like-the-deep-agents-sdk) helps you choose the right tool for your needs.
 
-Developing LLM-powered applications involves significant complexity beyond simple prompt-and-response cycles. LangChain and LangGraph address these specific challenges:
-
-* Orchestration: Managing complex sequences where the output of one LLM call serves as the input for the next (Chains).
-* State & Memory: Implementing persistence so that applications can remember past interactions across different sessions.
-* Tool Integration: Providing a standard way to connect LLMs to external APIs, databases, and local functions.
-* Control Flow: Using LangGraph to create cyclic graphs for agents that need to reason, act, and observe in loops.
-
 ## Agent frameworks (like LangChain)
 
 Agent frameworks provide abstractions that make it easier to get started when building with LLMs.
@@ -100,6 +93,10 @@ While you can accomplish similar tasks with LangChain, LangGraph, and Deep Agent
 ***
 
 
-<Tip icon="terminal" iconType="regular">
-  [Connect these docs](/use-these-docs) to Claude, VSCode, and more via MCP for real-time answers.
-</Tip>
+Developing LLM-powered applications involves significant complexity beyond simple prompt-and-response cycles. LangChain and LangGraph address **these specific challenges**:
+
+* Orchestration: Managing complex sequences where the output of one LLM call serves as the input for the next (Chains).
+* State & Memory: Implementing persistence so that applications can remember past interactions across different sessions.
+* Tool Integration: Providing a standard way to connect LLMs to external APIs, databases, and local functions.
+* Control Flow: Using LangGraph to create cyclic graphs for agents that need to reason, act, and observe in loops.
+* 
