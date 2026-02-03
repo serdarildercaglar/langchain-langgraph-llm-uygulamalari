@@ -234,12 +234,13 @@ State ile:
 
 #### Kod Örneği: State Tanımlama
 
-Python'da State tanımlamak için `TypedDict` veya `Pydantic` kullanılır:
+Python'da State tanımlamak için `TypedDict` veya `Pydantic` kullanılır. Notebook'larımızda **MessagesState** kullanıyoruz:
 
 ```python
-from typing import TypedDict, Annotated, List
+from typing import TypedDict, Annotated, List, Literal
 from operator import add
-from langgraph.graph import MessagesState
+from langgraph.graph import MessagesState, StateGraph, START, END
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 # Yöntem 1: TypedDict ile özel state
 class MusteriDestekState(TypedDict):
@@ -272,8 +273,8 @@ class MusteriDestekState(TypedDict):
     bulunan_bilgiler: dict
 
 
-# Yöntem 2: Hazır MessagesState kullanımı
-# (Çoğu chatbot için yeterli)
+# Yöntem 2: Hazır MessagesState kullanımı (ÖNERİLEN)
+# Notebook'larımızda bu yaklaşımı kullanıyoruz
 class BasitChatState(MessagesState):
     """
     MessagesState otomatik olarak şunu içerir:
@@ -286,6 +287,8 @@ class BasitChatState(MessagesState):
     """
     kullanici_id: str
 ```
+
+> **📌 Not:** Notebook'larımızda (02 ve 03) doğrudan `MessagesState` kullanıyoruz. Bu, LangGraph'ın sağladığı hazır bir state yapısıdır ve mesaj tabanlı agent'lar için idealdir.
 
 #### Reducer Fonksiyonları: State Nasıl Güncellenir?
 
@@ -397,12 +400,12 @@ def ornek_node(
 **1. LLM Çağrısı Yapan Node:**
 
 ```python
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain.chat_models import init_chat_model
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 # LLM'i bir kez tanımla, node'larda kullan
-# Not: Güncel model adları için OpenAI dokümantasyonunu kontrol edin
-llm = ChatOpenAI(model="gpt-4o")
+# Notebook'larımızda Google Gemini kullanıyoruz
+llm = init_chat_model("google_genai:gemini-2.0-flash", temperature=0)
 
 def llm_ile_analiz(state: MusteriDestekState) -> dict:
     """
@@ -666,6 +669,39 @@ Bu iki framework rakip değil, **tamamlayıcıdır**. Doğru aracı seçmek içi
 | **Streaming**          | Token-level                      | Execution event-level            |
 | **Debug/Test**         | Standart                         | Görselleştirme desteği        |
 | **Kullanım Alanı**   | Prototip, basit botlar           | Production, karmaşık sistemler |
+
+### LangChain Agent Örneği (Notebook 02'den)
+
+```python
+from langchain.agents import create_agent
+from langchain.chat_models import init_chat_model
+
+# Tool listesi
+tools = [retrieve_context, tavily_tool]
+
+# Model tanımla (Google Gemini)
+model = init_chat_model("google_genai:gemini-2.5-flash")
+
+# System Prompt - Agent davranışını belirler
+system_prompt = """
+You are a helpful assistant. You must answer the user's questions using the following strictly ordered process:
+1. **SEARCH INTERNAL**: First, use the 'retrieve_context' tool to check for local information.
+2. **EVALUATE**: If the 'retrieve_context' output contains the answer, use it and stop.
+3. **SEARCH EXTERNAL**: ONLY if internal context is missing, use 'tavily_search_results_json'.
+"""
+
+# Agent oluştur
+agent = create_agent(model, tools, system_prompt=system_prompt)
+
+# Çalıştır
+for step in agent.stream(
+    {"messages": [{"role": "user", "content": "What is 'Self-Reflection' in LLM agents?"}]},
+    stream_mode="values",
+):
+    step["messages"][-1].pretty_print()
+```
+
+> **📌 Not:** LangChain'de `create_agent()` tüm karmaşıklığı sizin yerinize yönetir. Ancak akışı özelleştirmek isterseniz (örn: Grader mekanizması) LangGraph'a geçmeniz gerekir.
 
 ### v1.0 Güncellemeleri
 
@@ -992,260 +1028,360 @@ Bu bölüm, eğitimin uygulama kısmına (Notebook 02 ve 03) doğrudan hazırlı
 
 ### Senaryo Tanımı
 
-**Görev:** Kullanıcının sorusunu yanıtlayan bir agent oluşturun.
+**Görev:** Lilian Weng'in "LLM Powered Autonomous Agents" blog yazısı üzerine RAG + Web Arama agent'ı oluşturun.
 
-**Kural:**
+**Kural (Notebook'lardan):**
 
-1. **Önce** yerel dokümanlarda ara (RAG)
-2. Bulunamazsa **sonra** web'de ara
-3. Her iki kaynaktan da bulunamazsa "Bilgi bulunamadı" de
+1. **Basit sorular** (matematik, selamlama) için direkt yanıt ver
+2. **Bilgi gerektiren sorular** için önce RAG tool'u ile yerel dokümanlarda ara
+3. **Grader kontrolü**: Bulunan dokümanlar alakalı mı?
+4. Alakalı değilse → **Tavily** ile web'de ara
+5. Final yanıt oluştur
+
+**Bilgi Kaynağı:**
+- Blog URL: `https://lilianweng.github.io/posts/2023-06-23-agent/`
+- Konular: Self-Reflection, Memory, Tool Use, Planning vb.
 
 ### Akış Diyagramı
 
+Notebook 03'teki graf yapısı:
+
 ```mermaid
 graph TD
-    START([Basla]) --> INPUT[Kullanici Sorusu]
+    START([__start__]) --> DECIDE[generate_query_or_respond]
 
-    INPUT --> RAG[Yerel Dokumanlarda Ara<br>RAG Tool]
+    DECIDE --> TOOLS_CHECK{tools_condition}
 
-    RAG --> CHECK1{Sonuc<br>bulundu mu?}
+    TOOLS_CHECK -->|Tool cagirdi| RETRIEVE[retrieve<br>ToolNode]
+    TOOLS_CHECK -->|Tool cagirmadi<br>direkt yanit| END([__end__])
 
-    CHECK1 -->|Evet| GENERATE1[Yanit Olustur<br>Yerel kaynak]
-    CHECK1 -->|Hayir| WEB[Webde Ara<br>Web Search Tool]
+    RETRIEVE --> GRADE{grade_documents}
 
-    WEB --> CHECK2{Sonuc<br>bulundu mu?}
+    GRADE -->|Docs GOOD| GENERATE[generate_answer]
+    GRADE -->|Docs BAD| FALLBACK[web_search_fallback]
 
-    CHECK2 -->|Evet| GENERATE2[Yanit Olustur<br>Web kaynak]
-    CHECK2 -->|Hayir| NOTFOUND[Bilgi Bulunamadi]
+    FALLBACK --> GENERATE
 
-    GENERATE1 --> END([Bitir])
-    GENERATE2 --> END
-    NOTFOUND --> END
+    GENERATE --> END
 
     style START fill:#fff3e0
     style END fill:#c8e6c9
-    style NOTFOUND fill:#ffcdd2
-    style RAG fill:#e3f2fd
-    style WEB fill:#e3f2fd
+    style RETRIEVE fill:#e3f2fd
+    style FALLBACK fill:#ffcdd2
+    style GRADE fill:#f3e5f5
 ```
+
+**Akış Özeti:**
+1. **generate_query_or_respond**: Agent karar verir (tool kullan mı, direkt yanıtla mı?)
+2. **retrieve**: RAG tool'u çalışır, vektör veritabanından doküman çeker
+3. **grade_documents**: Dokümanlar alakalı mı kontrol eder (Grader)
+4. **web_search_fallback**: Dokümanlar yetersizse Tavily ile web araması
+5. **generate_answer**: Final yanıt üretimi
 
 ### Tool Tanımlamaları
 
+Notebook'larımızda kullandığımız tool tanımlamaları şöyledir:
+
 ```python
+import bs4
+from langchain_chroma import Chroma
+from langchain_community.document_loaders import WebBaseLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.tools import tool
-from langchain_community.vectorstores import FAISS
-from langchain_community.utilities import GoogleSearchAPIWrapper
+from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain.chat_models import init_chat_model
+
+# Embeddings modeli
+embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
+
+# Örnek: Blog içeriğinden bilgi tabanı oluşturma
+loader = WebBaseLoader(
+    web_paths=("https://lilianweng.github.io/posts/2023-06-23-agent/",),
+    bs_kwargs=dict(
+        parse_only=bs4.SoupStrainer(
+            class_=("post-content", "post-title", "post-header")
+        )
+    ),
+)
+docs = loader.load()
+
+# Metni parçalara ayır
+text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+all_splits = text_splitter.split_documents(docs)
+
+# Vector Store oluştur (Chroma kullanarak)
+vector_store = Chroma.from_documents(
+    documents=all_splits,
+    embedding=embeddings,
+    collection_name="agent_blog_context"
+)
 
 # Tool 1: Yerel Dokümanlarda Arama (RAG)
-@tool
-def yerel_dokuman_ara(soru: str) -> str:
+@tool(response_format="content_and_artifact")
+def retrieve_context(query: str):
     """
-    Yerel veritabanındaki dokümanlarda arama yapar.
-
-    Bu tool, şirket içi dokümanlarda, FAQ'larda veya
-    önceden indekslenmiş içeriklerde arama yapar.
-
-    Args:
-        soru: Kullanıcının sorusu
-
-    Returns:
-        Bulunan ilgili doküman parçaları veya boş string
+    Searches the internal vector database to retrieve relevant documents
+    and context matching the input query.
     """
-    # Vector store'dan ilgili dokümanları getir
-    vectorstore = FAISS.load_local("dokumanlar_index")
-    sonuclar = vectorstore.similarity_search(soru, k=3)
+    # Boş sorgu kontrolü
+    if not query:
+        return "", []
 
-    if sonuclar:
-        return "\n\n".join([doc.page_content for doc in sonuclar])
-    return ""
+    retrieved_docs = vector_store.similarity_search(query, k=2)
+    serialized = "\n\n".join(
+        (f"Source: {doc.metadata}\nContent: {doc.page_content}")
+        for doc in retrieved_docs
+    )
+    return serialized, retrieved_docs
 
 
-# Tool 2: Web'de Arama
-@tool
-def web_ara(soru: str) -> str:
-    """
-    İnternet'te arama yapar.
-
-    Bu tool, yerel dokümanlarda bilgi bulunamadığında
-    güncel web içeriklerinde arama yapar.
-
-    Args:
-        soru: Aranacak sorgu
-
-    Returns:
-        Web arama sonuçları veya boş string
-    """
-    search = GoogleSearchAPIWrapper()
-    sonuclar = search.results(soru, num_results=3)
-
-    if sonuclar:
-        return "\n\n".join([
-            f"Başlık: {r['title']}\nÖzet: {r['snippet']}"
-            for r in sonuclar
-        ])
-    return ""
+# Tool 2: Web'de Arama (Tavily)
+tavily_tool = TavilySearchResults(
+    max_results=3,
+    description="Performs a live web search to find current information."
+)
 ```
+
+> **📌 Not:** `response_format="content_and_artifact"` parametresi, tool'un hem içerik hem de ham doküman nesnelerini döndürmesini sağlar. Bu, daha sonra grading veya kaynak gösterimi için kullanışlıdır.
 
 ### State Tanımı
 
+Notebook'larımızda **MessagesState** kullanıyoruz - bu LangGraph'ın sağladığı hazır bir state yapısıdır:
+
 ```python
-from typing import TypedDict, List, Optional
+from typing import Literal
+from langgraph.graph import MessagesState, StateGraph, START, END
+from pydantic import BaseModel, Field
 
-class RAGWebState(TypedDict):
-    """RAG + Web Arama Agent'ı için state."""
+# MessagesState kullanıyoruz - mesaj tabanlı agent'lar için ideal
+# Otomatik olarak "messages" alanı içerir (reducer tanımlı)
 
-    # Kullanıcı sorusu
-    soru: str
+# Grader için Pydantic model (doküman kalitesini değerlendirme)
+class GradeDocuments(BaseModel):
+    """Binary score for relevance check."""
+    binary_score: str = Field(description="'yes' if relevant, 'no' if not relevant")
 
-    # Arama sonuçları
-    yerel_sonuc: str      # RAG sonucu
-    web_sonuc: str        # Web arama sonucu
-
-    # Kullanılan kaynak
-    kaynak: str           # "yerel", "web", veya "yok"
-
-    # Final yanıt
-    yanit: str
-
-    # Mesaj geçmişi (opsiyonel)
-    messages: List
+# Structured output için LLM'i hazırla
+structured_llm_grader = llm.with_structured_output(GradeDocuments)
 ```
+
+> **📌 Not:** `MessagesState` kullanarak state yönetimini basitleştiriyoruz. Notebook 03'te göreceğiniz gibi, bu yapı tool çağrıları ve mesaj geçmişini otomatik olarak yönetir.
 
 ### Node Tanımlamaları
 
-```python
-def yerel_arama_node(state: RAGWebState) -> dict:
-    """Yerel dokümanlarda arama yapar."""
-    soru = state["soru"]
-    sonuc = yerel_dokuman_ara.invoke(soru)
-
-    return {"yerel_sonuc": sonuc}
-
-
-def web_arama_node(state: RAGWebState) -> dict:
-    """Web'de arama yapar."""
-    soru = state["soru"]
-    sonuc = web_ara.invoke(soru)
-
-    return {"web_sonuc": sonuc}
-
-
-def yanit_olustur_node(state: RAGWebState) -> dict:
-    """Bulunan bilgilerle yanıt oluşturur."""
-
-    if state["yerel_sonuc"]:
-        kaynak = "yerel"
-        bilgi = state["yerel_sonuc"]
-    elif state["web_sonuc"]:
-        kaynak = "web"
-        bilgi = state["web_sonuc"]
-    else:
-        return {
-            "kaynak": "yok",
-            "yanit": "Üzgünüm, sorunuzla ilgili bilgi bulunamadı."
-        }
-
-    # LLM ile yanıt oluştur
-    prompt = f"""
-    Kullanıcı sorusu: {state['soru']}
-
-    Bulunan bilgi ({kaynak} kaynağından):
-    {bilgi}
-
-    Bu bilgiyi kullanarak kullanıcıya yardımcı bir yanıt oluştur.
-    """
-
-    yanit = llm.invoke(prompt)
-
-    return {
-        "kaynak": kaynak,
-        "yanit": yanit.content
-    }
-```
-
-### Yönlendirici Fonksiyon
+Notebook 03'te kullandığımız 4 ana node:
 
 ```python
-def arama_yonlendirici(state: RAGWebState) -> str:
-    """
-    Yerel arama sonucuna göre yönlendirir.
+from langchain_core.messages import HumanMessage, SystemMessage
+from langgraph.prebuilt import ToolNode, tools_condition
 
-    - Sonuç varsa → yanıt oluştur
-    - Sonuç yoksa → web'de ara
+def generate_query_or_respond(state: MessagesState):
     """
-    if state["yerel_sonuc"]:
-        return "yanit_olustur"
+    Adım 1: Agent karar verir - RAG tool kullanılacak mı?
+    Basit matematik veya selamlama sorularında direkt yanıt verir.
+    """
+    print("---NODE: DECIDE (Agent)---")
+
+    system_prompt = (
+        "You are a helpful assistant. "
+        "For any fact-based question, you MUST use the 'retrieve_context' tool first. "
+        "Only answer directly if it is a simple math problem or greeting."
+    )
+
+    messages = [SystemMessage(content=system_prompt)] + state["messages"]
+
+    # Agent burada sadece RAG tool'unu görür
+    model_with_tools = llm.bind_tools([retrieve_context])
+    response = model_with_tools.invoke(messages)
+
+    return {"messages": [response]}
+
+
+def grade_documents(state: MessagesState) -> Literal["generate_answer", "web_search_fallback"]:
+    """
+    Adım 2: RAG sonuçları yeterli mi kontrol et.
+    Dokümanlar alakalı değilse web aramasına yönlendir.
+    """
+    print("---NODE: GRADE DOCUMENTS---")
+
+    messages = state["messages"]
+    last_message = messages[-1]  # Tool çıktısı
+    question = messages[0].content
+    context = last_message.content
+
+    # 1. Kontrol: Context boş mu?
+    if not context:
+        print("---DECISION: EMPTY CONTEXT -> WEB SEARCH---")
+        return "web_search_fallback"
+
+    # 2. Kontrol: Context alakalı mı?
+    grade_prompt = f"""User Question: {question}
+    Retrieved Docs: {context}
+    Are these docs relevant to answer the question? Answer 'yes' or 'no'."""
+
+    scored_result = structured_llm_grader.invoke(grade_prompt)
+
+    if scored_result.binary_score == "yes":
+        print("---DECISION: DOCS GOOD -> GENERATE---")
+        return "generate_answer"
     else:
-        return "web_ara"
+        print("---DECISION: DOCS BAD -> WEB SEARCH---")
+        return "web_search_fallback"
 
 
-def web_sonuc_kontrol(state: RAGWebState) -> str:
+def web_search_fallback(state: MessagesState):
     """
-    Web arama sonucuna göre yönlendirir.
-
-    Her durumda yanıt oluştur (boş da olsa).
+    Adım 3 (Fallback): RAG başarısız olursa Tavily ile web araması yap.
     """
-    return "yanit_olustur"
+    print("---NODE: WEB SEARCH FALLBACK---")
+    messages = state["messages"]
+    question = messages[0].content
+
+    # Direkt Tavily tool'unu çalıştır
+    search_results = tavily_tool.invoke(question)
+
+    # Sonucu mesaj olarak ekle
+    return {"messages": [HumanMessage(content=f"Web Search Results: {search_results}")]}
+
+
+def generate_answer(state: MessagesState):
+    """
+    Adım 4: Final yanıt oluştur.
+    RAG veya Web aramasından gelen bilgiyi kullanarak yanıt üret.
+    """
+    print("---NODE: GENERATE ANSWER---")
+    messages = state["messages"]
+    question = messages[0].content
+    context = messages[-1].content  # Son mesaj ya RAG ya da Search sonucu
+
+    prompt = f"""Answer the question using the context below.
+    Question: {question}
+    Context: {context}
+    Answer:"""
+
+    response = llm.invoke(prompt)
+    return {"messages": [response]}
 ```
+
+> **📌 Not:** Bu yapıda `grade_documents` node'u bir **router** görevi görür - döndürdüğü string değere göre akış farklı node'lara yönlendirilir.
 
 ### Graf Oluşturma
 
+Notebook 03'teki gibi graf yapısı:
+
 ```python
-from langgraph.graph import StateGraph, START, END
+from langgraph.graph import StateGraph, START, END, MessagesState
+from langgraph.prebuilt import ToolNode, tools_condition
 
-# Graf oluştur
-graph = StateGraph(RAGWebState)
+workflow = StateGraph(MessagesState)
 
-# Node'ları ekle
-graph.add_node("yerel_ara", yerel_arama_node)
-graph.add_node("web_ara", web_arama_node)
-graph.add_node("yanit_olustur", yanit_olustur_node)
+# Düğümleri Ekle
+workflow.add_node("generate_query_or_respond", generate_query_or_respond)
+workflow.add_node("retrieve", ToolNode([retrieve_context]))
+workflow.add_node("web_search_fallback", web_search_fallback)
+workflow.add_node("generate_answer", generate_answer)
 
-# Edge'leri tanımla
-graph.add_edge(START, "yerel_ara")
+# Kenarları Bağla
+workflow.add_edge(START, "generate_query_or_respond")
 
-graph.add_conditional_edges(
-    "yerel_ara",
-    arama_yonlendirici,
+# Conditional Edge: Agent Kararı
+# Agent tool çağırırsa -> 'retrieve'
+# Çağırmazsa (örn: 3+5) -> END
+workflow.add_conditional_edges(
+    "generate_query_or_respond",
+    tools_condition,  # LangGraph'ın hazır tool kontrol fonksiyonu
     {
-        "yanit_olustur": "yanit_olustur",
-        "web_ara": "web_ara"
+        "tools": "retrieve",
+        END: END
     }
 )
 
-graph.add_edge("web_ara", "yanit_olustur")
-graph.add_edge("yanit_olustur", END)
+# Conditional Edge: Grader Kararı
+# Retrieve düğümünden sonra mecburi Grader kontrolü
+workflow.add_conditional_edges(
+    "retrieve",
+    grade_documents,
+    {
+        "generate_answer": "generate_answer",       # Dokümanlar iyi -> Yanıt üret
+        "web_search_fallback": "web_search_fallback" # Dokümanlar kötü -> Web'de ara
+    }
+)
+
+# Fallback ve Final Edge'ler
+workflow.add_edge("web_search_fallback", "generate_answer")
+workflow.add_edge("generate_answer", END)
 
 # Derle
-app = graph.compile()
+app = workflow.compile()
+
+# Görselleştir (opsiyonel)
+# from IPython.display import Image, display
+# display(Image(app.get_graph().draw_mermaid_png()))
 ```
 
-### Çalıştırma
+> **📌 Not:** `tools_condition` LangGraph'ın hazır bir yardımcı fonksiyonudur. Agent'ın tool çağırıp çağırmadığını kontrol eder ve akışı buna göre yönlendirir.
+
+### Çalıştırma ve Test
+
+Notebook 03'teki test fonksiyonu:
 
 ```python
-# Test 1: Yerel dokümanda bulunabilecek soru
-sonuc1 = app.invoke({
-    "soru": "Şirketimizin iade politikası nedir?",
-    "yerel_sonuc": "",
-    "web_sonuc": "",
-    "kaynak": "",
-    "yanit": "",
-    "messages": []
-})
-print(f"Kaynak: {sonuc1['kaynak']}")  # "yerel"
-print(f"Yanıt: {sonuc1['yanit']}")
+def run_test(case_name, user_input):
+    """Test fonksiyonu - akışı takip eder ve sonucu gösterir."""
+    print(f"\n{'='*20} {case_name} {'='*20}")
+    inputs = {"messages": [{"role": "user", "content": user_input}]}
 
-# Test 2: Sadece web'de bulunabilecek soru
-sonuc2 = app.invoke({
-    "soru": "Bugün dolar kuru kaç TL?",
-    "yerel_sonuc": "",
-    "web_sonuc": "",
-    "kaynak": "",
-    "yanit": "",
-    "messages": []
-})
-print(f"Kaynak: {sonuc2['kaynak']}")  # "web"
-print(f"Yanıt: {sonuc2['yanit']}")
+    final_text = "No response generated."
+
+    for chunk in app.stream(inputs):
+        for node_name, values in chunk.items():
+            if "messages" in values:
+                last_msg = values["messages"][-1]
+                if hasattr(last_msg, "content") and values["messages"][0].type == "ai":
+                    final_text = last_msg.content
+                elif node_name == "generate_query_or_respond" and not hasattr(last_msg, "tool_calls"):
+                    final_text = last_msg.content
+
+    print(f"\nFINAL OUTPUT > {final_text}")
+
+
+# --- TEST SENARYOLARI ---
+
+# Case 1: Basit Matematik (RAG'a girmemeli, direkt cevaplamalı)
+run_test("CASE 1: Math (Direct)", "What is 3+5?")
+# Beklenen: Agent direkt "8" yanıtını verir
+
+# Case 2: RAG (İçeride var, 'retrieve' -> 'generate' gitmeli)
+run_test("CASE 2: RAG (Internal)", "What is 'Memory' in the context of LLM Agents?")
+# Beklenen: Blog içeriğinden yanıt üretir
+
+# Case 3: Search (İçeride yok, 'retrieve' -> 'fallback' -> 'generate' gitmeli)
+run_test("CASE 3: Search (External)", "Who won the Euro 2024 final match?")
+# Beklenen: Tavily ile web araması yapar, "Spain" yanıtını verir
+```
+
+**Beklenen Çıktılar:**
+
+```
+==================== CASE 1: Math (Direct) ====================
+---NODE: DECIDE (Agent)---
+FINAL OUTPUT > 3 + 5 = 8
+
+==================== CASE 2: RAG (Internal) ====================
+---NODE: DECIDE (Agent)---
+---NODE: GRADE DOCUMENTS---
+---DECISION: DOCS GOOD -> GENERATE---
+---NODE: GENERATE ANSWER---
+FINAL OUTPUT > In the context of LLM Agents, 'Memory' refers to...
+
+==================== CASE 3: Search (External) ====================
+---NODE: DECIDE (Agent)---
+---NODE: GRADE DOCUMENTS---
+---DECISION: DOCS BAD -> WEB SEARCH---
+---NODE: WEB SEARCH FALLBACK---
+---NODE: GENERATE ANSWER---
+FINAL OUTPUT > Spain won the Euro 2024 final match, defeating England 2-1.
 ```
 
 ---
@@ -1365,16 +1501,21 @@ Bu teori bölümünü tamamladınız. Şimdi öğrendiklerinizi **pratiğe dökm
 
 **Notebook 02 (LangChain):**
 
-- Hızlı prototipleme
-- Hazır agent şablonları
-- Basit RAG implementasyonu
+- `create_agent()` ile hızlı agent oluşturma
+- Google Gemini modeli (`gemini-2.5-flash`) kullanımı
+- `retrieve_context` ve `TavilySearchResults` tool entegrasyonu
+- System prompt ile agent davranışını yönlendirme
+- `.stream()` ile adım adım çalışmayı gözlemleme
 
 **Notebook 03 (LangGraph):**
 
-- Aynı problem, farklı yaklaşım
-- Döngüsel akış (önce yerel, sonra web)
-- State yönetimi pratiği
-- LangChain'den farkları görme
+- Aynı problem, **tam kontrol** ile çözüm
+- `StateGraph` ve `MessagesState` kullanımı
+- **Grader mekanizması**: Doküman kalitesi değerlendirme
+- **Conditional edges**: `tools_condition` ve custom router
+- **ToolNode**: LangGraph'ın hazır tool yürütücüsü
+- 4 node yapısı: decide → retrieve → grade → generate
+- Fallback mekanizması: RAG başarısız → Web araması
 
 ---
 
@@ -1406,6 +1547,75 @@ Bu bölüm, LangGraph ile production'a çıkarken **mutlaka kontrol edilmesi ger
 | **Memory** | Otomatik özellik | Tasarım kararı - LangGraph sadece taşıyıcı |
 | **Debugging** | Checkpoint ile gelir | Checkpoint = veri, debug = ek tooling gerekir |
 | **Production Başarısı** | Güçlü LLM ile gelir | Mimari tasarımdan gelir |
+
+### 🔄 Idempotent ve Replay Risk Nedir?
+
+**Hata #5 ve #10'u anlamak için bu kavramları bilmek gerekir:**
+
+#### Senaryo: Sipariş Onay E-postası
+
+```python
+# ❌ YANLIŞ - Idempotent DEĞİL
+def siparis_onayla(state):
+    siparis_id = state["siparis_id"]
+
+    # 1. Veritabanında "onaylandı" yap
+    db.update(siparis_id, status="onaylandi")
+
+    # 2. Müşteriye e-posta gönder
+    email.send(musteri, "Siparişiniz onaylandı!")
+
+    # 3. Stok güncelle
+    stok.azalt(urun_id)  # ← Tam burada SUNUCU ÇÖKTÜ! 💥
+
+    return {"sonuc": "tamam"}
+```
+
+**Ne Olur?**
+
+```
+İLK ÇALIŞMA:
+├── ✅ Veritabanı güncellendi
+├── ✅ E-posta GÖNDERİLDİ (müşteri aldı)
+└── 💥 Stok güncellemede HATA → Sunucu çöktü
+
+LANGGRAPH RESTART ETTİ (checkpoint'ten devam):
+├── ✅ Veritabanı güncellendi (tekrar)
+├── ✅ E-posta GÖNDERİLDİ (müşteri 2. KEZ aldı!) ← REPLAY RISK!
+└── ✅ Stok güncellendi
+
+Sonuç: Müşteri 2 tane aynı e-posta aldı! 😱
+```
+
+#### Çözüm: Idempotent Yazma
+
+```python
+# ✅ DOĞRU - Idempotent
+def siparis_onayla_GUVENLI(state):
+    siparis_id = state["siparis_id"]
+
+    # Önce kontrol et: Bu işlem daha önce yapıldı mı?
+    siparis = db.get(siparis_id)
+
+    if not siparis.email_gonderildi:  # ← Idempotency kontrolü
+        email.send(musteri, "Siparişiniz onaylandı!")
+        db.update(siparis_id, email_gonderildi=True)
+    else:
+        print("E-posta zaten gönderilmiş, atlıyorum")
+
+    return {"sonuc": "tamam"}
+```
+
+#### Özet
+
+| Terim | Anlam | Örnek |
+|-------|-------|-------|
+| **Idempotent** | Kaç kez çalışırsa çalışsın aynı sonuç | `x = 5` (hep 5) |
+| **Idempotent DEĞİL** | Her çalışmada farklı etki | `email.send()` (her seferinde yeni mail) |
+| **Replay Risk** | Restart sonrası aynı işlem tekrar çalışır | 2x e-posta, 2x ödeme |
+| **Idempotency Key** | "Bu işlem yapıldı mı?" kontrolü | `if not already_done: do_it()` |
+
+> **📌 Kural:** E-posta gönderme, ödeme alma, SMS atma, API çağrısı gibi **dış dünyayı etkileyen** (side-effect) işlemleri olan node'lar **mutlaka** idempotent yazılmalıdır.
 
 ### ✅ Production-Ready Checklist
 
@@ -1449,4 +1659,4 @@ Production'a çıkmadan önce şunları kontrol edin:
 
 *Bu materyal, AI practitioners için hazırlanmış uygulamalı eğitim serisinin bir parçasıdır.*
 
-*Son güncelleme: 2025*
+*Son güncelleme: Şubat 2026 - Notebook'larla senkronize edildi*
